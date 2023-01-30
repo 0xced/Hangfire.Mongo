@@ -1,37 +1,30 @@
 using System;
-using EphemeralMongo;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using DockerRunner;
+using DockerRunner.Xunit;
 using Hangfire.Mongo.Database;
 using Hangfire.Mongo.Migration.Strategies;
 using Hangfire.Mongo.Migration.Strategies.Backup;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using MongoDB.Driver.Linq;
+using Xunit;
 using Xunit.Abstractions;
-using Xunit.Sdk;
 
 namespace Hangfire.Mongo.Tests.Utils;
 
-public sealed class MongoDbFixture : IDisposable
+public class MongoDbFixture : IAsyncLifetime
 {
     private const string DefaultDatabaseName = @"Hangfire-Mongo-Tests";
 
-    private readonly IMongoRunner _runner;
+    private readonly DockerContainerFixture<MongoDbContainerConfiguration> _containerFixture;
 
-    public MongoDbFixture(IMessageSink sink)
-    {
-        var options = new MongoRunnerOptions
-        {
-            //StandardOuputLogger = text => sink.OnMessage(new DiagnosticMessage(text)),
-            StandardErrorLogger = text => sink.OnMessage(new DiagnosticMessage($"MongoDB ERROR: {text}")),
-            UseSingleNodeReplicaSet = true
-        };
-        _runner = MongoRunner.Run(options);
-    }
+    public MongoDbFixture(IMessageSink messageSink) => _containerFixture = new DockerContainerFixture<MongoDbContainerConfiguration>(messageSink);
 
-    public void Dispose()
-    {
-        _runner.Dispose();
-    }
+    async Task IAsyncLifetime.InitializeAsync() => await ((IAsyncLifetime)_containerFixture).InitializeAsync();
+
+    async Task IAsyncLifetime.DisposeAsync() => await ((IAsyncLifetime)_containerFixture).DisposeAsync();
 
     public MongoStorage CreateStorage(string databaseName = null)
     {
@@ -76,7 +69,16 @@ public sealed class MongoDbFixture : IDisposable
 
     private MongoClient GetMongoClient()
     {
-        var settings = MongoClientSettings.FromConnectionString(_runner.ConnectionString);
+        var hostEndpoint = _containerFixture.ContainerInfo.PortMappings.First(e => e.ContainerPort == 27017).HostEndpoint;
+        var connectionString = $"mongodb://{hostEndpoint.Address}:{hostEndpoint.Port}";
+        var settings = MongoClientSettings.FromConnectionString(connectionString);
         return new MongoClient(settings);
+    }
+
+    private class MongoDbContainerConfiguration : DockerContainerConfiguration
+    {
+        public override string ImageName => "bitnami/mongodb:5.0";
+        public override string ContainerName => "Hangfire.Mongo.Tests";
+        public override IReadOnlyDictionary<string, string> EnvironmentVariables { get; } = new Dictionary<string, string> { ["ALLOW_EMPTY_PASSWORD"] = "yes" };
     }
 }
